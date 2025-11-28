@@ -107,11 +107,12 @@
       try {
         console.log('Début de la synchronisation pour:', address);
         
-        // Pas besoin de proxy CORS quand hébergé sur un vrai serveur !
+        // Utilisation de l'API RealToken directement (alternative à RealT Community)
+        // Cette API est maintenue par la communauté et devrait avoir moins de restrictions CORS
         
-        // 1. Récupérer toutes les propriétés RealT
+        // 1. Récupérer toutes les propriétés depuis l'API alternative
         console.log('Récupération de la liste des propriétés...');
-        const propertiesResponse = await fetch('https://api.realt.community/v1/token');
+        const propertiesResponse = await fetch('https://api.realtoken.community/v1/token');
         
         if (!propertiesResponse.ok) {
           throw new Error(`Erreur API propriétés: ${propertiesResponse.status}`);
@@ -120,16 +121,106 @@
         const allProperties = await propertiesResponse.json();
         console.log(`${allProperties.length} propriétés récupérées`);
 
-        // 2. Récupérer le portefeuille de l'utilisateur
-        console.log('Récupération du portefeuille...');
-        const walletResponse = await fetch(`https://api.realt.community/v1/wallet/${address}`);
+        // 2. Pour le wallet, on va utiliser The Graph (alternative décentralisée)
+        console.log('Récupération du portefeuille via blockchain...');
         
-        if (!walletResponse.ok) {
-          throw new Error(`Erreur API wallet: ${walletResponse.status}`);
+        // Requête GraphQL pour récupérer les tokens du wallet sur Gnosis Chain
+        const graphqlQuery = {
+          query: `{
+            account(id: "${address.toLowerCase()}") {
+              balances(where: {valueExact_gt: "0"}) {
+                token {
+                  id
+                  symbol
+                  name
+                }
+                valueExact
+              }
+            }
+          }`
+        };
+        
+        const graphResponse = await fetch('https://api.thegraph.com/subgraphs/name/realtoken-thegraph/realtoken-xdai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(graphqlQuery)
+        });
+        
+        if (!graphResponse.ok) {
+          throw new Error('Erreur lors de la récupération du wallet');
         }
         
-        const walletData = await walletResponse.json();
-        console.log('Données wallet:', walletData);
+        const graphData = await graphResponse.json();
+        console.log('Données wallet:', graphData);
+
+        if (!graphData.data || !graphData.data.account || !graphData.data.account.balances || graphData.data.account.balances.length === 0) {
+          setSyncError('Aucune propriété trouvée pour cette adresse sur Gnosis Chain');
+          setIsLoading(false);
+          return;
+        }
+
+        const walletBalances = graphData.data.account.balances;
+        console.log(`${walletBalances.length} tokens trouvés dans le wallet`);
+
+        // 3. Créer le mapping des propriétés avec les quantités
+        const syncedProperties = walletBalances.map(balance => {
+          const tokenAddress = balance.token.id;
+          const tokenAmount = parseFloat(balance.valueExact) / 1e18; // Conversion depuis wei
+          
+          // Trouver la propriété correspondante
+          const propertyData = allProperties.find(p => 
+            p.gnosisContract?.toLowerCase() === tokenAddress.toLowerCase() ||
+            p.ethereumContract?.toLowerCase() === tokenAddress.toLowerCase()
+          );
+
+          if (!propertyData || tokenAmount < 0.01) {
+            return null;
+          }
+
+          const tokenPrice = parseFloat(propertyData.tokenPrice) || 0;
+
+          return validateYieldData({
+            id: Date.now() + Math.random(),
+            shortName: propertyData.shortName || balance.token.name || 'Unknown',
+            fullName: propertyData.fullName || balance.token.name || 'Unknown Property',
+            tokens: tokenAmount,
+            officialPrice: tokenPrice,
+            annualPercentageYield: parseFloat(propertyData.annualPercentageYield) || 0,
+            city: propertyData.coordinate?.city || '',
+            state: propertyData.coordinate?.state || '',
+            netRentYearPerToken: parseFloat(propertyData.netRentYearPerToken) || 0,
+            totalInvestment: tokenAmount * tokenPrice,
+            purchases: [{
+              id: Date.now() + Math.random(),
+              tokens: tokenAmount,
+              price: tokenPrice
+            }],
+            purchasePrice: tokenPrice
+          });
+        }).filter(Boolean);
+
+        console.log(`${syncedProperties.length} propriétés valides après mapping`);
+
+        if (syncedProperties.length === 0) {
+          setSyncError('Aucune propriété RealT valide trouvée pour cette adresse');
+          setIsLoading(false);
+          return;
+        }
+
+        // 4. Mettre à jour l'état
+        setProperties(syncedProperties);
+        setWalletAddress(address);
+        localStorage.setItem(ADDRESS_KEY, address);
+        setSyncError('');
+        console.log('Synchronisation réussie!');
+        
+      } catch (error) {
+        console.error('Erreur de synchronisation complète:', error);
+        setSyncError(`Erreur: ${error.message || 'Impossible de se connecter aux APIs RealT'}`);
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
         if (!walletData || !walletData.tokens || walletData.tokens.length === 0) {
           setSyncError('Aucune propriété trouvée pour cette adresse');
