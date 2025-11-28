@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Portfolio RealT</title>
+
+  <!-- React + Babel + Tailwind -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(to bottom right, #ebf4ff, #c3dafe);
+    }
+    input::-webkit-inner-spin-button, input::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .spinner {
+      border: 3px solid #f3f4f6;
+      border-top: 3px solid #4f46e5;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+  const { useState, useEffect, useRef, useMemo } = React;
+
+  const STORAGE_KEY = 'realt_portfolio';
+  const ADDRESS_KEY = 'realt_wallet_address';
+
+  const Upload = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>;
+  const Download = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+  const RefreshCw = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>;
+  const ChevronDown = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>;
+  const ChevronUp = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline points="18 15 12 9 6 15"/></svg>;
+  const Plus = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+  const Trash2 = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>;
+  const Wallet = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12h.01"/></svg>;
+
+  const toNumber = (v, fallback = 0) => {
+    const n = parseFloat(String(v).replace(',', '.'));
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  const cleanString = (str) => {
+    if (!str) return '';
+    return String(str).replace(/"/g, '').trim();
+  };
+
+  const validateYieldData = (property) => {
+    let netRentYearPerToken = property.netRentYearPerToken || 0;
+    let officialPrice = property.officialPrice || 1;
+    
+    const calculatedYield = (netRentYearPerToken / officialPrice) * 100;
+    
+    if (calculatedYield > 1000) {
+      console.warn(`Yield suspect pour ${property.shortName}: ${calculatedYield}%`);
+      
+      if (property.annualPercentageYield && property.annualPercentageYield > 0) {
+        netRentYearPerToken = (property.annualPercentageYield / 100) * officialPrice;
+      }
+    }
+    
+    return {
+      ...property,
+      netRentYearPerToken: netRentYearPerToken
+    };
+  };
+
+  function RealTPortfolio() {
+    const [properties, setProperties] = useState([]);
+    const [expanded, setExpanded] = useState(null);
+    const [walletAddress, setWalletAddress] = useState('');
+    const [inputAddress, setInputAddress] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [syncError, setSyncError] = useState('');
+    const fileInputRef = useRef(null);
+    const initialLoad = useRef(false);
+
+    // Fonction pour synchroniser avec l'API RealT
+    const syncWithRealT = async (address) => {
+      if (!address || address.length !== 42 || !address.startsWith('0x')) {
+        setSyncError('Adresse invalide. Format attendu: 0x...');
+        return;
+      }
+
+      setIsLoading(true);
+      setSyncError('');
+
+      try {
+        console.log('Début de la synchronisation pour:', address);
+        
+        // Pas besoin de proxy CORS quand hébergé sur un vrai serveur !
+        
+        // 1. Récupérer toutes les propriétés RealT
+        console.log('Récupération de la liste des propriétés...');
+        const propertiesResponse = await fetch('https://api.realt.community/v1/token');
+        
+        if (!propertiesResponse.ok) {
+          throw new Error(`Erreur API propriétés: ${propertiesResponse.status}`);
+        }
+        
+        const allProperties = await propertiesResponse.json();
+        console.log(`${allProperties.length} propriétés récupérées`);
+
+        // 2. Récupérer le portefeuille de l'utilisateur
+        console.log('Récupération du portefeuille...');
+        const walletResponse = await fetch(`https://api.realt.community/v1/wallet/${address}`);
+        
+        if (!walletResponse.ok) {
+          throw new Error(`Erreur API wallet: ${walletResponse.status}`);
+        }
+        
+        const walletData = await walletResponse.json();
+        console.log('Données wallet:', walletData);
+
+        if (!walletData || !walletData.tokens || walletData.tokens.length === 0) {
+          setSyncError('Aucune propriété trouvée pour cette adresse');
+          setIsLoading(false);
+          return;
+        }
+
+        console.log(`${walletData.tokens.length} tokens trouvés dans le wallet`);
+
+        // 3. Créer le mapping des propriétés avec les quantités
+        const syncedProperties = walletData.tokens.map(token => {
+          // Trouver la propriété correspondante
+          const propertyData = allProperties.find(p => 
+            p.gnosisContract?.toLowerCase() === token.token?.toLowerCase() ||
+            p.ethereumContract?.toLowerCase() === token.token?.toLowerCase()
+          );
+
+          if (!propertyData) {
+            console.warn('Propriété non trouvée pour le token:', token.token);
+            return null;
+          }
+
+          const tokenAmount = parseFloat(token.amount) || 0;
+          const tokenPrice = parseFloat(propertyData.tokenPrice) || 0;
+
+          return validateYieldData({
+            id: Date.now() + Math.random(),
+            shortName: propertyData.shortName || 'Unknown',
+            fullName: propertyData.fullName || 'Unknown Property',
+            tokens: tokenAmount,
+            officialPrice: tokenPrice,
+            annualPercentageYield: parseFloat(propertyData.annualPercentageYield) || 0,
+            city: propertyData.coordinate?.city || '',
+            state: propertyData.coordinate?.state || '',
+            netRentYearPerToken: parseFloat(propertyData.netRentYearPerToken) || 0,
+            totalInvestment: tokenAmount * tokenPrice,
+            purchases: [{
+              id: Date.now() + Math.random(),
+              tokens: tokenAmount,
+              price: tokenPrice
+            }],
+            purchasePrice: tokenPrice
+          });
+        }).filter(Boolean);
+
+        console.log(`${syncedProperties.length} propriétés valides après mapping`);
+
+        if (syncedProperties.length === 0) {
+          setSyncError('Aucune propriété valide trouvée');
+          setIsLoading(false);
+          return;
+        }
+
+        // 4. Mettre à jour l'état
+        setProperties(syncedProperties);
+        setWalletAddress(address);
+        localStorage.setItem(ADDRESS_KEY, address);
+        setSyncError('');
+        console.log('Synchronisation réussie!');
+        
+      } catch (error) {
+        console.error('Erreur de synchronisation complète:', error);
+        setSyncError(`Erreur: ${error.message || 'Impossible de se connecter à l\'API RealT'}`);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    // Fonction pour importer le CSV
+    const handleFileImport = (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const csvText = e.target.result;
+        const lines = csvText.split('\n');
+        const headers = lines[0].split(';');
+        
+        const importedProperties = lines.slice(1).map(line => {
+          const values = line.split(';');
+          if (values.length < headers.length) return null;
+          
+          const property = {
+            id: Date.now() + Math.random(),
+            shortName: cleanString(values[0]),
+            fullName: cleanString(values[1]),
+            tokens: toNumber(values[2]),
+            officialPrice: toNumber(values[3]),
+            annualPercentageYield: toNumber(values[4]),
+            city: cleanString(values[5]),
+            state: cleanString(values[6]),
+            netRentYearPerToken: toNumber(values[21]),
+            totalInvestment: toNumber(values[43]),
+            purchases: [{
+              id: Date.now() + Math.random(),
+              tokens: toNumber(values[2]),
+              price: toNumber(values[3])
+            }],
+            purchasePrice: toNumber(values[3])
+          };
+          
+          return validateYieldData(property);
+        }).filter(Boolean);
+
+        setProperties(importedProperties);
+        setWalletAddress(''); // Réinitialiser l'adresse car on utilise l'import manuel
+        localStorage.removeItem(ADDRESS_KEY);
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    };
+
+    useEffect(() => {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      const savedAddress = localStorage.getItem(ADDRESS_KEY);
+      
+      if (savedAddress) {
+        setWalletAddress(savedAddress);
+        setInputAddress(savedAddress);
+      }
+      
+      if (saved) {
+        try {
+          const data = JSON.parse(saved);
+          const validatedData = data.map(validateYieldData);
+          setProperties(validatedData);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      
+      initialLoad.current = true;
+    }, []);
+
+    useEffect(() => {
+      if (!initialLoad.current) return;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(properties));
+    }, [properties]);
+
+    const stats = useMemo(() => {
+      const real = properties.reduce((s, p) => s + p.tokens * p.purchasePrice, 0);
+      const current = properties.reduce((s, p) => s + p.tokens * p.officialPrice, 0);
+      const totalTokens = properties.reduce((s, p) => s + p.tokens, 0);
+      const totalProperties = properties.length;
+      
+      const yearlyRent = properties.reduce((s, p) => {
+        return s + (p.tokens * (p.netRentYearPerToken || 0));
+      }, 0);
+      
+      const totalValueAtOfficialPrice = properties.reduce((s, p) => {
+        return s + (p.tokens * p.officialPrice);
+      }, 0);
+      
+      const yieldMarket = totalValueAtOfficialPrice ? (yearlyRent / totalValueAtOfficialPrice) * 100 : 0;
+      const yieldInvested = real ? (yearlyRent / real) * 100 : 0;
+      
+      return { 
+        real, 
+        current, 
+        monthly: yearlyRent / 12, 
+        yearly: yearlyRent, 
+        yieldMarket,
+        yieldInvested,
+        totalTokens: parseFloat(totalTokens.toFixed(2)),
+        totalProperties
+      };
+    }, [properties]);
+
+    const updatePurchases = (id, newPurchases) => {
+      setProperties(prev => prev.map(p => {
+        if (p.id !== id) return p;
+        const total = newPurchases.reduce((s, x) => s + toNumber(x.tokens, 0), 0);
+        const avg = total ? (newPurchases.reduce((s, x) => s + x.tokens * x.price, 0) / total) : p.officialPrice;
+        return { ...p, tokens: total, purchasePrice: avg, purchases: newPurchases };
+      }));
+    };
+
+    const addPurchase = id => {
+      setProperties(prev => prev.map(p =>
+        p.id === id
+          ? { ...p, purchases: [...p.purchases, { id: Date.now(), tokens: 1, price: p.officialPrice }] }
+          : p
+      ));
+    };
+
+    const removePurchase = (id, purId) => {
+      setProperties(prev => prev.map(p => {
+        if (p.id !== id) return p;
+        if (p.purchases.length <= 1) return p;
+        const filtered = p.purchases.filter(x => x.id !== purId);
+        const total = filtered.reduce((s, x) => s + x.tokens, 0);
+        const avg = total ? (filtered.reduce((s, x) => s + x.tokens * x.price, 0) / total) : p.officialPrice;
+        return { ...p, purchases: filtered, tokens: total, purchasePrice: avg };
+      }));
+    };
+
+    const editPurchase = (id, purId, field, val) => {
+      const parsed = toNumber(val, 0);
+      setProperties(prev => prev.map(p => {
+        if (p.id !== id) return p;
+        const updated = p.purchases.map(x => x.id === purId ? { ...x, [field]: parsed } : x);
+        const total = updated.reduce((s, x) => s + x.tokens, 0);
+        const avg = total ? (updated.reduce((s, x) => s + x.tokens * x.price, 0) / total) : p.officialPrice;
+        return { ...p, purchases: updated, tokens: total, purchasePrice: avg };
+      }));
+    };
+
+    const exportCSV = () => {
+      const rows = properties.map(p => [
+        p.shortName, p.tokens, p.purchasePrice, p.officialPrice, p.netRentYearPerToken
+      ].join(';'));
+      const csv = ['Nom;Tokens;Prix Moyen;Prix RealT;Loyer Annuel par Token', ...rows].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'portfolio_realt.csv';
+      a.click();
+    };
+
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        {/* Section de synchronisation avec wallet */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <h2 className="text-xl font-bold text-indigo-600 mb-4 flex items-center gap-2">
+            <Wallet /> Synchronisation Wallet
+          </h2>
+          <div className="flex gap-3 items-start">
+            <div className="flex-1">
+              <input
+                type="text"
+                placeholder="Entrez votre adresse ERC20 (0x...)"
+                value={inputAddress}
+                onChange={(e) => setInputAddress(e.target.value)}
+                className="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none"
+                disabled={isLoading}
+              />
+              {syncError && (
+                <p className="text-red-600 text-sm mt-2">{syncError}</p>
+              )}
+              {walletAddress && !syncError && (
+                <p className="text-green-600 text-sm mt-2">
+                  ✓ Synchronisé avec: {walletAddress.substring(0, 10)}...{walletAddress.substring(walletAddress.length - 8)}
+                </p>
+              )}
+            </div>
+            <button
+              onClick={() => syncWithRealT(inputAddress)}
+              disabled={isLoading}
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-lg flex items-center gap-2 font-medium"
+            >
+              {isLoading ? (
+                <>
+                  <div className="spinner"></div>
+                  Chargement...
+                </>
+              ) : (
+                <>
+                  <RefreshCw /> Synchroniser
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-3xl font-bold text-indigo-600">Portfolio RealT</h1>
+            <div className="flex gap-2">
+              <button onClick={() => window.location.reload()} className="bg-green-600 text-white px-4 py-2 rounded flex items-center gap-2"><RefreshCw /> Actualiser</button>
+              <button onClick={() => fileInputRef.current.click()} className="bg-purple-600 text-white px-4 py-2 rounded flex items-center gap-2"><Upload /> Importer CSV</button>
+              <input 
+                ref={fileInputRef} 
+                type="file" 
+                className="hidden" 
+                accept=".csv"
+                onChange={handleFileImport}
+              />
+              <button onClick={exportCSV} className="bg-indigo-600 text-white px-4 py-2 rounded flex items-center gap-2"><Download /> Exporter</button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-green-50 p-4 rounded border border-green-200">
+              <p className="text-sm text-green-800">Investissement Réel</p>
+              <p className="text-2xl font-bold text-green-900">${stats.real.toFixed(2)}</p>
+            </div>
+            <div className="bg-blue-50 p-4 rounded border border-blue-200">
+              <p className="text-sm text-blue-800">Valeur Actuelle</p>
+              <p className="text-2xl font-bold text-blue-900">${stats.current.toFixed(2)}</p>
+            </div>
+            <div className="bg-purple-50 p-4 rounded border border-purple-200">
+              <p className="text-sm text-purple-800">Loyer Mensuel</p>
+              <p className="text-2xl font-bold text-purple-900">${stats.monthly.toFixed(2)}</p>
+            </div>
+            <div className="bg-orange-50 p-4 rounded border border-orange-200">
+              <p className="text-sm text-orange-800">Yield Global</p>
+              <p className="text-2xl font-bold text-orange-900">
+                {Math.min(stats.yieldInvested, 100).toFixed(2)}%
+              </p>
+              <p className="text-xs text-orange-600 mt-1">
+                RealT: {Math.min(stats.yieldMarket, 100).toFixed(2)}%
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-indigo-600 text-white">
+              <tr>
+                <th className="px-4 py-3 text-left">
+                  <div className="flex items-center gap-2">
+                    <span>Propriété</span>
+                    <span className="text-sm font-normal opacity-80">
+                      ({stats.totalProperties})
+                    </span>
+                  </div>
+                </th>
+                <th className="px-4 py-3 text-center">
+                  <div className="flex items-center justify-center gap-2">
+                    <span>Tokens</span>
+                    <span className="text-sm font-normal opacity-80">
+                      ({stats.totalTokens.toFixed(2)})
+                    </span>
+                  </div>
+                </th>
+                <th className="px-4 py-3 text-center">Prix Token</th>
+                <th className="px-4 py-3 text-center">Valeur Actuelle</th>
+                <th className="px-4 py-3 text-center">Yield</th>
+                <th className="px-4 py-3 text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {properties.map(p => {
+                const currentValue = p.tokens * p.officialPrice;
+                const realValue = p.tokens * p.purchasePrice;
+                
+                let yieldMarket = 0;
+                if (p.officialPrice > 0) {
+                  yieldMarket = ((p.netRentYearPerToken || 0) / p.officialPrice) * 100;
+                  yieldMarket = Math.min(yieldMarket, 100);
+                }
+                
+                let yieldInvested = 0;
+                if (p.purchasePrice > 0) {
+                  yieldInvested = ((p.netRentYearPerToken || 0) / p.purchasePrice) * 100;
+                  yieldInvested = Math.min(yieldInvested, 100);
+                }
+                
+                const annualRent = p.tokens * (p.netRentYearPerToken || 0);
+                const weeklyRent = annualRent / 52;
+                
+                const isOpen = expanded === p.id;
+
+                const priceColor = p.purchasePrice < p.officialPrice ? 'text-green-600' : 
+                                 p.purchasePrice > p.officialPrice ? 'text-red-600' : 'text-indigo-600';
+
+                return (
+                  <React.Fragment key={p.id}>
+                    <tr className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="font-semibold">{p.shortName}</p>
+                          <p className="text-sm text-gray-600">{p.city}, {p.state}</p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-center font-medium">{p.tokens.toFixed(2)}</td>
+                      <td className="px-4 py-3 text-center">
+                        <p className={`font-bold ${priceColor}`}>${p.purchasePrice.toFixed(2)}</p>
+                        <p className="text-xs text-gray-500">RealT: ${p.officialPrice.toFixed(2)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <p className="font-bold text-green-600">${currentValue.toFixed(2)}</p>
+                        <p className="text-xs text-gray-500">Investi: ${realValue.toFixed(2)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`px-3 py-1 rounded-full text-sm font-bold ${
+                          yieldInvested >= 9 ? 'bg-green-100 text-green-800' : 
+                          yieldInvested >= 7 ? 'bg-blue-100 text-blue-800' : 
+                          yieldInvested >= 5 ? 'bg-yellow-100 text-yellow-800' : 
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {yieldInvested.toFixed(2)}%
+                        </span>
+                        <p className="text-xs text-gray-500 mt-1">
+                          RealT: {yieldMarket.toFixed(2)}%
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          Loyer: ${weeklyRent.toFixed(2)}/sem
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button onClick={() => setExpanded(isOpen ? null : p.id)} className="text-indigo-600">
+                          {isOpen ? <ChevronUp /> : <ChevronDown />}
+                        </button>
+                      </td>
+                    </tr>
+
+                    {isOpen && (
+                      <tr>
+                        <td colSpan="6" className="bg-gray-50">
+                          <div className="p-5">
+                            <h4 className="font-semibold mb-3 text-gray-800">Modifier les achats</h4>
+
+                            {p.purchases.map((pur, idx) => (
+                              <div key={pur.id} className="flex items-center gap-3 mb-2 bg-[#f9fafb] p-3 rounded-lg border border-gray-100">
+                                <span className="text-sm text-gray-700 w-16">Achat {idx + 1}</span>
+                                <input type="number" min="0.01" step="0.01" value={pur.tokens} onChange={e => editPurchase(p.id, pur.id, 'tokens', e.target.value)} className="w-20 px-2 py-1 border rounded text-center" />
+                                <span className="text-sm">@</span>
+                                <input type="number" min="0" step="0.01" value={pur.price} onChange={e => editPurchase(p.id, pur.id, 'price', e.target.value)} className="w-24 px-2 py-1 border rounded text-center" />
+                                <span className="text-sm text-gray-600">= ${(pur.tokens * pur.price).toFixed(2)}</span>
+                                {p.purchases.length > 1 && <button onClick={() => removePurchase(p.id, pur.id)} className="text-red-600 ml-auto"><Trash2 /></button>}
+                              </div>
+                            ))}
+
+                            <button onClick={() => addPurchase(p.id)} className="mt-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium">
+                              <Plus /> Ajouter un achat
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<RealTPortfolio />);
+  </script>
+</body>
+</html>
