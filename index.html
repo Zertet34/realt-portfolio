@@ -4,12 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Portfolio RealT</title>
-
-  <!-- React + Babel + Tailwind -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <style>
     body {
@@ -94,7 +92,6 @@
     const fileInputRef = useRef(null);
     const initialLoad = useRef(false);
 
-    // Fonction pour synchroniser avec l'API RealT
     const syncWithRealT = async (address) => {
       if (!address || address.length !== 42 || !address.startsWith('0x')) {
         setSyncError('Adresse invalide. Format attendu: 0x...');
@@ -105,26 +102,17 @@
       setSyncError('');
 
       try {
-        console.log('Début de la synchronisation pour:', address);
+        console.log('Synchronisation pour:', address);
         
-        // Utilisation de l'API RealToken directement (alternative à RealT Community)
-        // Cette API est maintenue par la communauté et devrait avoir moins de restrictions CORS
-        
-        // 1. Récupérer toutes les propriétés depuis l'API alternative
-        console.log('Récupération de la liste des propriétés...');
         const propertiesResponse = await fetch('https://api.realtoken.community/v1/token');
         
         if (!propertiesResponse.ok) {
-          throw new Error(`Erreur API propriétés: ${propertiesResponse.status}`);
+          throw new Error(`Erreur API: ${propertiesResponse.status}`);
         }
         
         const allProperties = await propertiesResponse.json();
-        console.log(`${allProperties.length} propriétés récupérées`);
+        console.log(`${allProperties.length} propriétés RealT disponibles`);
 
-        // 2. Pour le wallet, on va utiliser The Graph (alternative décentralisée)
-        console.log('Récupération du portefeuille via blockchain...');
-        
-        // Requête GraphQL pour récupérer les tokens du wallet sur Gnosis Chain
         const graphqlQuery = {
           query: `{
             account(id: "${address.toLowerCase()}") {
@@ -147,27 +135,24 @@
         });
         
         if (!graphResponse.ok) {
-          throw new Error('Erreur lors de la récupération du wallet');
+          throw new Error('Impossible de récupérer les données blockchain');
         }
         
         const graphData = await graphResponse.json();
-        console.log('Données wallet:', graphData);
 
         if (!graphData.data || !graphData.data.account || !graphData.data.account.balances || graphData.data.account.balances.length === 0) {
-          setSyncError('Aucune propriété trouvée pour cette adresse sur Gnosis Chain');
+          setSyncError('Aucun token RealT trouvé pour cette adresse sur Gnosis Chain');
           setIsLoading(false);
           return;
         }
 
         const walletBalances = graphData.data.account.balances;
-        console.log(`${walletBalances.length} tokens trouvés dans le wallet`);
+        console.log(`${walletBalances.length} tokens dans le wallet`);
 
-        // 3. Créer le mapping des propriétés avec les quantités
         const syncedProperties = walletBalances.map(balance => {
           const tokenAddress = balance.token.id;
-          const tokenAmount = parseFloat(balance.valueExact) / 1e18; // Conversion depuis wei
+          const tokenAmount = parseFloat(balance.valueExact) / 1e18;
           
-          // Trouver la propriété correspondante
           const propertyData = allProperties.find(p => 
             p.gnosisContract?.toLowerCase() === tokenAddress.toLowerCase() ||
             p.ethereumContract?.toLowerCase() === tokenAddress.toLowerCase()
@@ -199,15 +184,12 @@
           });
         }).filter(Boolean);
 
-        console.log(`${syncedProperties.length} propriétés valides après mapping`);
-
         if (syncedProperties.length === 0) {
-          setSyncError('Aucune propriété RealT valide trouvée pour cette adresse');
+          setSyncError('Aucune propriété RealT valide trouvée');
           setIsLoading(false);
           return;
         }
 
-        // 4. Mettre à jour l'état
         setProperties(syncedProperties);
         setWalletAddress(address);
         localStorage.setItem(ADDRESS_KEY, address);
@@ -215,81 +197,13 @@
         console.log('Synchronisation réussie!');
         
       } catch (error) {
-        console.error('Erreur de synchronisation complète:', error);
-        setSyncError(`Erreur: ${error.message || 'Impossible de se connecter aux APIs RealT'}`);
+        console.error('Erreur:', error);
+        setSyncError(`Erreur: ${error.message}`);
       } finally {
         setIsLoading(false);
       }
     };
 
-        if (!walletData || !walletData.tokens || walletData.tokens.length === 0) {
-          setSyncError('Aucune propriété trouvée pour cette adresse');
-          setIsLoading(false);
-          return;
-        }
-
-        console.log(`${walletData.tokens.length} tokens trouvés dans le wallet`);
-
-        // 3. Créer le mapping des propriétés avec les quantités
-        const syncedProperties = walletData.tokens.map(token => {
-          // Trouver la propriété correspondante
-          const propertyData = allProperties.find(p => 
-            p.gnosisContract?.toLowerCase() === token.token?.toLowerCase() ||
-            p.ethereumContract?.toLowerCase() === token.token?.toLowerCase()
-          );
-
-          if (!propertyData) {
-            console.warn('Propriété non trouvée pour le token:', token.token);
-            return null;
-          }
-
-          const tokenAmount = parseFloat(token.amount) || 0;
-          const tokenPrice = parseFloat(propertyData.tokenPrice) || 0;
-
-          return validateYieldData({
-            id: Date.now() + Math.random(),
-            shortName: propertyData.shortName || 'Unknown',
-            fullName: propertyData.fullName || 'Unknown Property',
-            tokens: tokenAmount,
-            officialPrice: tokenPrice,
-            annualPercentageYield: parseFloat(propertyData.annualPercentageYield) || 0,
-            city: propertyData.coordinate?.city || '',
-            state: propertyData.coordinate?.state || '',
-            netRentYearPerToken: parseFloat(propertyData.netRentYearPerToken) || 0,
-            totalInvestment: tokenAmount * tokenPrice,
-            purchases: [{
-              id: Date.now() + Math.random(),
-              tokens: tokenAmount,
-              price: tokenPrice
-            }],
-            purchasePrice: tokenPrice
-          });
-        }).filter(Boolean);
-
-        console.log(`${syncedProperties.length} propriétés valides après mapping`);
-
-        if (syncedProperties.length === 0) {
-          setSyncError('Aucune propriété valide trouvée');
-          setIsLoading(false);
-          return;
-        }
-
-        // 4. Mettre à jour l'état
-        setProperties(syncedProperties);
-        setWalletAddress(address);
-        localStorage.setItem(ADDRESS_KEY, address);
-        setSyncError('');
-        console.log('Synchronisation réussie!');
-        
-      } catch (error) {
-        console.error('Erreur de synchronisation complète:', error);
-        setSyncError(`Erreur: ${error.message || 'Impossible de se connecter à l\'API RealT'}`);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    // Fonction pour importer le CSV
     const handleFileImport = (event) => {
       const file = event.target.files[0];
       if (!file) return;
@@ -298,11 +212,10 @@
       reader.onload = (e) => {
         const csvText = e.target.result;
         const lines = csvText.split('\n');
-        const headers = lines[0].split(';');
         
         const importedProperties = lines.slice(1).map(line => {
           const values = line.split(';');
-          if (values.length < headers.length) return null;
+          if (values.length < 7) return null;
           
           const property = {
             id: Date.now() + Math.random(),
@@ -327,7 +240,7 @@
         }).filter(Boolean);
 
         setProperties(importedProperties);
-        setWalletAddress(''); // Réinitialiser l'adresse car on utilise l'import manuel
+        setWalletAddress('');
         localStorage.removeItem(ADDRESS_KEY);
       };
       reader.readAsText(file);
@@ -390,15 +303,6 @@
       };
     }, [properties]);
 
-    const updatePurchases = (id, newPurchases) => {
-      setProperties(prev => prev.map(p => {
-        if (p.id !== id) return p;
-        const total = newPurchases.reduce((s, x) => s + toNumber(x.tokens, 0), 0);
-        const avg = total ? (newPurchases.reduce((s, x) => s + x.tokens * x.price, 0) / total) : p.officialPrice;
-        return { ...p, tokens: total, purchasePrice: avg, purchases: newPurchases };
-      }));
-    };
-
     const addPurchase = id => {
       setProperties(prev => prev.map(p =>
         p.id === id
@@ -443,7 +347,6 @@
 
     return (
       <div className="p-6 max-w-7xl mx-auto">
-        {/* Section de synchronisation avec wallet */}
         <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
           <h2 className="text-xl font-bold text-indigo-600 mb-4 flex items-center gap-2">
             <Wallet /> Synchronisation Wallet
@@ -463,7 +366,7 @@
               )}
               {walletAddress && !syncError && (
                 <p className="text-green-600 text-sm mt-2">
-                  ✓ Synchronisé avec: {walletAddress.substring(0, 10)}...{walletAddress.substring(walletAddress.length - 8)}
+                  ✓ Synchronisé: {walletAddress.substring(0, 10)}...{walletAddress.substring(walletAddress.length - 8)}
                 </p>
               )}
             </div>
@@ -627,7 +530,7 @@
                             <h4 className="font-semibold mb-3 text-gray-800">Modifier les achats</h4>
 
                             {p.purchases.map((pur, idx) => (
-                              <div key={pur.id} className="flex items-center gap-3 mb-2 bg-[#f9fafb] p-3 rounded-lg border border-gray-100">
+                              <div key={pur.id} className="flex items-center gap-3 mb-2 bg-white p-3 rounded-lg border border-gray-200">
                                 <span className="text-sm text-gray-700 w-16">Achat {idx + 1}</span>
                                 <input type="number" min="0.01" step="0.01" value={pur.tokens} onChange={e => editPurchase(p.id, pur.id, 'tokens', e.target.value)} className="w-20 px-2 py-1 border rounded text-center" />
                                 <span className="text-sm">@</span>
